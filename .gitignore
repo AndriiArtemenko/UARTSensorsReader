@@ -15,3 +15,16 @@
 *.exe
 *.out
 *.app
+Obj/*
+Exe/*
+Linker/*
+ds18x20_v2.hci
+List/WiFlyDevice.asm
+List/WiFlyDevice.lst
+List/WiFlyDevice.map
+WiFlyDevice.prj~
+WiFlyDevice.c~
+WiFlyDevice.cbi
+WiFlyDevice.cci
+WiFlyDevice.cof
+WiFlyDevice.fct

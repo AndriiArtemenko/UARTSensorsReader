@@ -24,7 +24,6 @@ Data Stack size         : 32
 #include <delay.h>
 #include <string.h> 
 #include <stdlib.h>    
-#include <1wire.h>
 #include "ds18x20_v2.h"
 
 void USART_Send(char* str);
@@ -36,20 +35,24 @@ void USART_Send(char* str);
 #define F_CPU 1000000L
 #define BAUD_RATE 2400L
 
-#define ELECTRIC_DEVIDER 6400;
+#define ELECTRIC_DEVIDER 640;
 #define WATER_DEVIDER 1;
 
 //------------------VARs---------------------------
 // Counters.
-unsigned long int waterCounter = 0;
-unsigned long int waterCounterTic = 0;
-unsigned long int electricCounter = 0;
-unsigned long int electricCounterTic = 0;
+unsigned long waterCounter = 0;
+unsigned long waterCounterTic = 0;
+unsigned long electricCounter = 0;
+unsigned long electricCounterTic = 0;
 
-eeprom unsigned long int stored_waterCounter;
-eeprom unsigned long int stored_electricCounter;
+eeprom unsigned long stored_waterCounter;
+eeprom unsigned long stored_electricCounter;
 
 char command;
+bit electric_flag = 0;
+bit water_flag = 0;
+bit power_flag = 0;
+bit bounce_flag = 0;
 
 //------------------Common-------------------------
 // Led blink.
@@ -62,6 +65,20 @@ void blink6(int value){
 	PORTB.6 = 1;
 	delay_ms(value);
 	PORTB.6 = 0;
+}
+
+// Convert longint to char[]
+void mLtoA(unsigned long val, char* buf){
+    unsigned char size=0, buf_tmp[10], *p_buf=buf_tmp;
+    do{
+        *p_buf++ = val%10 + '0';
+        val/=10;
+        size++;
+    }while(val);
+    while(size--){
+        *buf++ = *--p_buf;
+    }
+    *buf=0x00;
 }
 
 // Load counters values from EEPROM.
@@ -97,39 +114,46 @@ int get_temperature(){
 // Interrupt from water counter.
 interrupt [EXT_INT0] void ext_int0_isr(void)
 {   
-    unsigned long int devider=WATER_DEVIDER;
-    waterCounterTic++; 
-    if (waterCounterTic >= devider) {
-        waterCounterTic = 0;
-        waterCounter++;  
-        blink6(50);
-    } 
-    // Antichatter 
-    delay_ms(100);
-    
+    unsigned long int devider=WATER_DEVIDER; 
+    if (bounce_flag == 0){  
+        bounce_flag = 1;
+        TIMSK=0x01;  
+        waterCounterTic++; 
+        if (waterCounterTic >= devider) {
+            waterCounterTic = 0;
+            waterCounter++;           
+            water_flag = 1;
+        } 
+    }   
 }
 
 // Interrupt from electric counter.
 interrupt [EXT_INT1] void ext_int1_isr(void)
 {
     unsigned long int devider=ELECTRIC_DEVIDER;
+    
     electricCounterTic++;
     if (electricCounterTic >= devider) {
         electricCounterTic = 0;
-        electricCounter++;
-        blink6(50);
+        electricCounter++;          
+        electric_flag = 1;
     }
 }
-
-// Standard Input/Output functions
-#include <stdio.h>
 
 //-----------------Comparator interrupt----------------
 // Power lost interrupt.
 interrupt [ANA_COMP] void ana_comp_isr(void)
 {
     save_countable();
-    blink7(50);            
+    power_flag = 1;            
+}
+
+//--------------Timer 0 output compare A----------------
+interrupt [TIM0_COMPA] void timer0_compa_isr(void)
+{
+    // Anti contact bounce.
+    bounce_flag = 0;
+    TIMSK=0x00;      
 }
 
 //----------------------UART---------------------------
@@ -160,23 +184,23 @@ void USART_Send(char* str)
 
 // Execute recived command.
 void execute(char command){	
-    char Buffer[];  
+    char Buffer[16];  
 	switch(command)
 	{
 		case 0x61: {
-			itoa(waterCounter, Buffer);
+			mLtoA(waterCounter, Buffer);
 			break;
 		}
 		case 0x62: {
-			itoa(electricCounter, Buffer);
+			mLtoA(electricCounter, Buffer);
 			break;
 		}
 		case 0x63: {  
-            itoa(get_temperature(), Buffer);   
+            mLtoA(get_temperature(), Buffer);   
 			break;
 		}
 		case 0x64: {
-			electricCounter=0;
+			waterCounter=0;
             strcpy(Buffer, "OK"); 
 			break;
 		}  
@@ -239,7 +263,15 @@ void init_Hardware() {
 	//(0<<ACBG)  |           // Disconnect 1.23V reference from AIN0 (use AIN0 and AIN1 pins)
 	(1<<ACIE)  |           // Comparator Interrupt enabled
 	(1<<ACIS1) |           // set interrupt bit on positive edge
-	(1<<ACIS0);            // (ACIS1 and ACIS0 == 11), so comparator do interrupt by rising side of impulse         
+	(1<<ACIS0);            // (ACIS1 and ACIS0 == 11), so comparator do interrupt by rising side of impulse
+    
+    // Timer/Counter 0 initialization
+    TCCR0A=0x02; // Set CTC mode(interrupt on math)
+    TCCR0B=0x05; // Set 1/1024 clock prescaler  (0,977 kHz)
+    TCNT0=0x00;  // Default timer0 value=0
+    OCR0A=0xFF;  // Math A register value=FF
+    OCR0B=0x00;  // Math A register value=FF 
+    TIMSK=0x00;  // Disable timer         
 }
 
 
@@ -260,5 +292,18 @@ CLKPR=0x03;
     load_countable();
     USART_Send("hello!");
     while (1){
+        if (electric_flag == 1){
+            blink6(100);
+            electric_flag = 0;    
+        }  
+        if (water_flag == 1){
+            blink6(100);
+            water_flag = 0;    
+        } 
+        if (power_flag == 1){
+            blink7(100);
+            power_flag = 0;    
+        } 
+            
     }
 }
